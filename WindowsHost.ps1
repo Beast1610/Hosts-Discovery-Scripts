@@ -107,7 +107,7 @@ function Check-TrustedHostsPolicy {
 function Configure-WinRM {
     Write-Verbose "Configuring WinRM..."
 
-    $scriptUrl = "https://ch-public-bucket.s3.amazonaws.com/ConfigureRemoting.ps1"
+    $scriptUrl = "link of ConfigureRemoting script(removed for securitya)"
     $scriptPath = "$env:TEMP\ConfigureRemoting.ps1"
 
     if (-Not (Test-Path $scriptPath)) {
