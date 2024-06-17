@@ -1,3 +1,7 @@
+param(
+    [switch]$Modify
+)
+
 # Check CPU and Memory resources
 function Check-Resources {
     $memory = (Get-WmiObject Win32_OperatingSystem).FreePhysicalMemory / 1KB
@@ -44,11 +48,15 @@ function Check-PowerShellVersion {
 function Set-RemoteExecutionPolicy {
     Write-Output "Setting remote execution policy..."
     $executionPolicy = Get-ExecutionPolicy -Scope LocalMachine
-    if ($executionPolicy -ne "RemoteSigned") {
-        Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
-        Write-Output "Execution policy updated to RemoteSigned"
+    if ($Modify) {
+        if ($executionPolicy -ne "RemoteSigned") {
+            Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope LocalMachine -Force
+            Write-Output "Execution policy updated to RemoteSigned"
+        } else {
+            Write-Output "Execution policy: RemoteSigned"
+        }
     } else {
-        Write-Output "Execution policy: RemoteSigned"
+        Write-Output "Execution policy check: Skipped (Modification not enabled)"
     }
 }
 
@@ -61,13 +69,17 @@ function Ensure-Port443Open {
         Write-Output "Port 443 (HTTPS) is already open."
     }
     else {
-        Write-Verbose "Port 443 (HTTPS) is not open. Opening port 443..."
-        try {
-            New-NetFirewallRule -DisplayName "Open Port 443" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow
-            Write-Output "Port 443 has been opened."
-        }
-        catch {
-            Write-Output "Failed to open port 443. Error: $_"
+        if ($Modify) {
+            Write-Verbose "Port 443 (HTTPS) is not open. Opening port 443..."
+            try {
+                New-NetFirewallRule -DisplayName "Open Port 443" -Direction Inbound -LocalPort 443 -Protocol TCP -Action Allow
+                Write-Output "Port 443 has been opened."
+            }
+            catch {
+                Write-Output "Failed to open port 443. Error: $_"
+            }
+        } else {
+            Write-Output "Port 443 (HTTPS) is not open. Modification not enabled."
         }
     }
 }
@@ -81,24 +93,27 @@ function Check-TrustedHostsPolicy {
         $trustedHostsPolicy = Get-GPRegistryValue -Name 'RemoteHosts' -Key 'HKLM\Software\Policies\Microsoft\Windows\WinRM\Client' -ValueName 'TrustedHosts' -ErrorAction SilentlyContinue
 
         if ($trustedHostsPolicy -ne $null -and $trustedHostsPolicy.PolicyState -eq "Enabled") {
-            Write-Output "TrustedHosts policy is managed by Group Policy. Setting it to 'Not Configured'."
+            if ($Modify) {
+                Write-Output "TrustedHosts policy is managed by Group Policy. Setting it to 'Not Configured'."
 
-            # Set the TrustedHosts policy to 'Not Configured'
-            Set-GPRegistryValue -Name 'RemoteHosts' -Key 'HKLM\Software\Policies\Microsoft\Windows\WinRM\Client' -ValueName 'TrustedHosts' -Type String -Value '' -ErrorAction Stop
-            Remove-GPRegistryValue -Name 'RemoteHosts' -Key 'HKLM\Software\Policies\Microsoft\Windows\WinRM\Client' -ValueName 'TrustedHosts' -ErrorAction Stop
+                # Set the TrustedHosts policy to 'Not Configured'
+                Set-GPRegistryValue -Name 'RemoteHosts' -Key 'HKLM\Software\Policies\Microsoft\Windows\WinRM\Client' -ValueName 'TrustedHosts' -Type String -Value '' -ErrorAction Stop
+                Remove-GPRegistryValue -Name 'RemoteHosts' -Key 'HKLM\Software\Policies\Microsoft\Windows\WinRM\Client' -ValueName 'TrustedHosts' -ErrorAction Stop
 
-            # Update Group Policy
-            Write-Output "Updating Group Policy to reflect changes..."
-            gpupdate /force | Out-Null
+                # Update Group Policy
+                Write-Output "Updating Group Policy to reflect changes..."
+                gpupdate /force | Out-Null
 
-            Write-Output "TrustedHosts policy has been set to 'Not Configured'."
+                Write-Output "TrustedHosts policy has been set to 'Not Configured'."
+            } else {
+                Write-Output "TrustedHosts policy is managed by Group Policy. No changes made (Modification not enabled)."
+            }
         } else {
             Write-Output "TrustedHosts policy is not managed by Group Policy. No change required."
         }
     }
     catch {
         Write-Output "Error checking or updating TrustedHosts policy: $_"
-        Write-Output "GroupPolicy module is not available. Skipping TrustedHosts policy check."
         Write-Output "GroupPolicy module is not available. Skipping TrustedHosts policy check."
     }
 }
@@ -107,7 +122,7 @@ function Check-TrustedHostsPolicy {
 function Configure-WinRM {
     Write-Verbose "Configuring WinRM..."
 
-    $scriptUrl = "link of ConfigureRemoting script(removed for securitya)"
+    $scriptUrl = "link of ConfigureRemoting script(removed for security)"
     $scriptPath = "$env:TEMP\ConfigureRemoting.ps1"
 
     if (-Not (Test-Path $scriptPath)) {
@@ -119,29 +134,33 @@ function Configure-WinRM {
             }
         }
         catch {
-         Write-Output "Failed to download ConfigureRemoting.ps1 script. Error: $_"
+            Write-Output "Failed to download ConfigureRemoting.ps1 script. Error: $_"
+            return $false
+        }
+    }
+
+    try {
+        Write-Verbose "Executing ConfigureRemoting.ps1 script at $scriptPath..."
+        $configOutput = & $scriptPath -Verbose:$VerbosePreference 4>&1
+        if ($VerbosePreference -eq 'Continue') {
+            Write-Output "Output from ConfigureRemoting.ps1:`n$configOutput"
+        }
+        return $true
+    }
+    catch {
+        Write-Output "Failed to execute ConfigureRemoting.ps1 script. Error: $_"
         return $false
     }
-}
-
-try {
-    Write-Verbose "Executing ConfigureRemoting.ps1 script at $scriptPath..."
-    $configOutput = & $scriptPath -Verbose:$VerbosePreference 4>&1
-    if ($VerbosePreference -eq 'Continue') {
-        Write-Output "Output from ConfigureRemoting.ps1:`n$configOutput"
-    }
-    return $true
-}
-catch {
-    Write-Output "Failed to execute ConfigureRemoting.ps1 script. Error: $_"
-    return $false
-}
 }
 
 # Disable UAC remote restrictions
 function Disable-UACRestrictions {
     Write-Output "Disabling UAC remote restrictions..."
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "LocalAccountTokenFilterPolicy" -Value 1
+    if ($Modify) {
+        Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "LocalAccountTokenFilterPolicy" -Value 1
+    } else {
+        Write-Output "UAC remote restrictions check: Skipped (Modification not enabled)"
+    }
 }
 
 # Main script
@@ -228,5 +247,8 @@ if ($winRMConfigPassed) {
     Write-Output "- WinRM configuration: Failed"
 }
 
-Write-Output "- UAC remote restrictions disable: Passed"
-          
+if ($Modify) {
+    Write-Output "- UAC remote restrictions disable: Passed"
+} else {
+    Write-Output "- UAC remote restrictions disable: Skipped (Modification not enabled)"
+}

@@ -10,30 +10,9 @@ read -p "Enter the SSH username used for Software: " ssh_user
 check_resources() {
     echo "Checking resource requirements..."
 
-    # Check if bc is installed
-    if ! command -v bc &> /dev/null; then
-        echo "bc is not installed. Installing bc..."
-        sudo apt-get install -y bc
-        if [ $? -ne 0 ]; then
-            echo "Failed to install bc."
-            CHECKLIST+=("bc installation: Failed")
-            return 1
-        fi
-    fi
-
-    # Check if sysstat is installed for mpstat
-    if ! command -v mpstat &> /dev/null; then
-        echo "sysstat is not installed. Installing sysstat..."
-        sudo apt-get install -y sysstat
-        if [ $? -ne 0 ]; then
-            echo "Failed to install sysstat."
-            CHECKLIST+=("sysstat installation: Failed")
-            return 1
-        fi
-    fi
-
-    # Check free memory
-    free_memory=$(free -m | awk '/^Mem:/{print $7}')
+    # Check free memory using basic method
+    free_memory=$(grep MemAvailable /proc/meminfo | awk '{print $2}')
+    free_memory=$((free_memory / 1024)) # Convert to MB
     if [ $? -ne 0 ]; then
         echo "Failed to check free memory."
         CHECKLIST+=("Free memory check: Failed")
@@ -48,15 +27,21 @@ check_resources() {
         CHECKLIST+=("Free memory: Failed ($free_memory MB available)")
     fi
 
-    # Check CPU
-    mpstat_output=$(mpstat 1 1 | awk '/^Average:/ {print $12}')
+    # Check CPU using basic method
+    cpu_idle=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/")
     if [ $? -ne 0 ]; then
         echo "Failed to check CPU idle percentage."
         CHECKLIST+=("CPU idle check: Failed")
         return 1
     fi
 
-    cpu_idle=$(echo $mpstat_output | awk '{print $1}')
+    cpu_free=$(echo "100 - $cpu_idle" | awk '{print $1}')
+    if [ $? -ne 0 ]; then
+        echo "Failed to calculate CPU free percentage."
+        CHECKLIST+=("CPU free calculation: Failed")
+        return 1
+    fi
+
     cpu_cores=$(nproc)
     if [ $? -ne 0 ]; then
         echo "Failed to check CPU cores."
@@ -64,28 +49,20 @@ check_resources() {
         return 1
     fi
 
-    cpu_free=$(echo "100 - $cpu_idle" | bc)
-    if [ $? -ne 0 ]; then
-        echo "Failed to calculate CPU free percentage."
-        CHECKLIST+=("CPU free calculation: Failed")
-        return 1
-    fi
-
     echo "CPU Idle: $cpu_idle%"
     echo "CPU Free: $cpu_free%"
 
-    if [ $cpu_cores -ge 2 ] && (( $(echo "$cpu_free >= .25" | bc -l) )); then
+    if [ $cpu_cores -ge 2 ] && (( $(echo "$cpu_free >= 0.25" | bc -l) )); then
         echo "CPU: Passed ($cpu_cores cores, $cpu_free% free)"
         CHECKLIST+=("CPU: Passed")
     else
-        echo "CPU: Failed ($cpu_cores cores, $cpu_free% free)"
+        echo "CPU: Failed ($cpu_cores cores, $cpu_free% free)")
         CHECKLIST+=("CPU: Failed ($cpu_cores cores, $cpu_free% free)")
     fi   
 
-    # Check /home/ space
+    # Check /home/ space using basic method
     home_free=$(df -m /home | awk 'NR==2 {print $4}')
     if [ $? -ne 0 ]; then
-       
         echo "Failed to check /home/ space."
         CHECKLIST+=("/home/ space check: Failed")
         return 1
@@ -99,7 +76,7 @@ check_resources() {
         CHECKLIST+=("/home/ space: Failed ($home_free MB available)")
     fi
 
-    # Check /opt/ space
+    # Check /opt/ space using basic method
     opt_free=$(df -m /opt | awk 'NR==2 {print $4}')
     if [ $? -ne 0 ]; then
         echo "Failed to check /opt/ space."
@@ -201,41 +178,35 @@ check_port_443() {
     else
         echo "Port 443 is not open. Enabling port 443..."
 
-        # Check if ufw is installed
-        if ! command -v ufw &> /dev/null; then
-            echo "ufw is not installed. Installing ufw..."
-            sudo apt-get install -y ufw
-            if [ $? -ne 0 ]; then
-                echo "Failed to install ufw."
-                CHECKLIST+=("ufw installation: Failed")
-                return 1
+        # Check if iptables is available
+        if command -v iptables &> /dev/null; then
+            sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+            sudo iptables-save > /etc/iptables/rules.v4
+            if [ $? -eq 0 ]; then
+                echo "Port 443 has been enabled."
+                CHECKLIST+=("Port 443 enable: Passed")
+            else
+                echo "Failed to enable port 443."
+                CHECKLIST+=("Port 443 enable: Failed")
             fi
-        fi
-
-        sudo ufw allow 443/tcp
-        sudo ufw reload
-        if [ $? -eq 0 ]; then
-            echo "Port 443 has been enabled."
-            CHECKLIST+=("Port 443 enable: Passed")
         else
-            echo "Failed to enable port 443."
-            CHECKLIST+=("Port 443 enable: Failed")
+            echo "iptables is not available. Cannot enable port 443."
+            CHECKLIST+=("Port 443 enable: Failed (iptables not available)")
         fi
     fi
 
-    # Enable ufw if it's not enabled
-    if ! sudo ufw status | grep -qw "active"; then
-        echo "Enabling firewall..."
-        sudo ufw enable
+    # Ensure iptables rules are persistent
+    if command -v iptables &> /dev/null; then
+        sudo iptables-save > /etc/iptables/rules.v4
         if [ $? -eq 0 ]; then
-            echo "Firewall has been enabled."
-            CHECKLIST+=("Firewall enable: Passed")
+            echo "Firewall rules saved."
+            CHECKLIST+=("Firewall rules save: Passed")
         else
-            echo "Failed to enable the firewall."
-            CHECKLIST+=("Firewall enable: Failed")
+            echo "Failed to save firewall rules."
+            CHECKLIST+=("Firewall rules save: Failed")
         fi
     else
-        CHECKLIST+=("Firewall enable: Passed")
+        CHECKLIST+=("Firewall rules save: Failed (iptables not available)")
     fi
 }
 
